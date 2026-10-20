@@ -498,6 +498,9 @@ function roomOf (e: { surface: string; viewport?: RenderViewport }) {
 }
 
 export const register: Register = (on, options) => {
+  // Whether someone is at the session. Until session.start says otherwise (a mod loaded in the middle
+  // of a session does not see it), someone is.
+  let isInteractive = true
   const speed = Number(options.speed)
   const shortAnswer = Number(options.shortAnswer ?? SHORT_ANSWER)
   settings = {
@@ -509,6 +512,8 @@ export const register: Register = (on, options) => {
   }
 
   on('session.start', async ($, e, next) => {
+    // A session nobody is at (`claude -p`: a script, a bot that runs Claude Code) is not narrated.
+    isInteractive = e.isInteractive
     const asked = String(options.language ?? '').trim()
     if (asked && !settings.language) $.ui.log(`narrator: "${cut(asked, 40)}" is not a language code (es, en, pt...): speaking the language you write in`, { to: 'debug' })
     await $.command.register({
@@ -566,7 +571,7 @@ export const register: Register = (on, options) => {
 
   on('tool.call', async ($, e, next) => {
     const result = await next(e)
-    if (e.agentId === undefined && actions.length < MAX_ACTIONS && (await read($, enabled))) {
+    if (isInteractive && e.agentId === undefined && actions.length < MAX_ACTIONS && (await read($, enabled))) {
       actions.push(describe(e) + (result.deny !== undefined ? ' (denied)' : result.isError ? ' (failed)' : ''))
     }
     return result
@@ -574,14 +579,14 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (e.agentId === undefined && e.reason === 'answer' && e.answer.trim() && (await read($, enabled))) void narrate($, e.answer)
+    if (isInteractive && e.agentId === undefined && e.reason === 'answer' && e.answer.trim() && (await read($, enabled))) void narrate($, e.answer)
     return result
   })
 
   on('command.run', { command: 'recap' }, async ($, e, next) => {
     silence()
     const result = await next(e)
-    if (result.text?.trim() && !NO_RECAP.test(result.text) && (await read($, enabled))) {
+    if (isInteractive && result.text?.trim() && !NO_RECAP.test(result.text) && (await read($, enabled))) {
       actions = []
       void narrate($, result.text)
     }
