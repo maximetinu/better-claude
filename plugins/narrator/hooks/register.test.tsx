@@ -442,6 +442,29 @@ test('the language setting shows beside the switch, tells the narrator and reach
   expect((await ui.find({ key: 'narrator' }))?.text).toBe('⏹︎ narrating · ES')
 })
 
+/** A Spanish answer too long to be read as it is. */
+const LARGO = `He añadido el **narrador** en \`plugins/narrator\`. ${'Habla después de cada turno, en tu idioma, con la mejor voz que tiene el sistema. '.repeat(3)}`
+
+test('a request whose words tell its language: the narrator is told to speak it', async ($, on) => {
+  const w = world(on, { store: { enabled: true } })
+  await startSession($)
+  const speech = w.nextSpeech()
+  await turn($, { prompt: 'añade el narrador y que hable en el idioma de la petición', answer: LARGO })
+  await speech
+  expect(w.systems[0]).toContain('Always speak Spanish (es)')
+  expect(w.spoken[0]!.env.NARRATOR_TEXT).toBe('He añadido el narrador y los tests pasan.')
+})
+
+test('a narration in another language than the request is not said: the answer is read instead', async ($, on) => {
+  const w = world(on, { reply: 'es\nI added the narrator and the tests pass, so it is ready for you.', store: { enabled: true } })
+  await startSession($)
+  const speech = w.nextSpeech()
+  await turn($, { prompt: 'añade el narrador y que hable en el idioma de la petición', answer: LARGO })
+  await speech
+  expect(w.spoken[0]!.env.NARRATOR_TEXT).toStartWith('He añadido el narrador en narrator.')
+  expect(w.spoken[0]!.env.NARRATOR_LANG).toBe('es')
+})
+
 test('a region is dropped, and a value that is no known language means automatic', () => {
   expect(languageOf('es-MX')).toBe('es')
   expect(languageOf(' PT ')).toBe('pt')

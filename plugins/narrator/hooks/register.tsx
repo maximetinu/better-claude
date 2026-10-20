@@ -412,15 +412,24 @@ async function narrate ($: EngineInterface, answer: string) {
       await speak($, narration, direct, directLanguage)
       return
     }
+    // The language to speak: the setting, else the request's when its words tell it. The model is told
+    // it in so many words: left to tell it from a request in one language and tool calls in another, it
+    // sometimes narrates in the wrong one.
+    const asked = settings.language || guessLanguage(request)
     const reply = await $.model.complete(
       // A short summary: no deep thinking, so it is said right after the turn.
-      { model: settings.model, system: NARRATOR(settings.language), prompt: brief(answer), maxTokens: 150, effort: 'low', timeoutMs: 30_000 },
+      { model: settings.model, system: NARRATOR(asked), prompt: brief(answer), maxTokens: 150, effort: 'low', timeoutMs: 30_000 },
       { signal: narration.abort.signal }
     ).catch(() => undefined)
     if (!narration.isActive) return
     const told = reply?.isAnswered ? parseNarration(reply.text) : undefined
-    // No narration written: the answer itself, as far as it reads aloud.
-    const { text, language } = told?.text ? told : { text: cut(direct, 250), language: directLanguage }
+    // A narration in another language than the request's is not said, whatever code the model wrote:
+    // its words tell. The setting is left to the model, as the answer may be in neither.
+    const toldLanguage = told ? guessLanguage(told.text) || told.language : ''
+    const isOtherLanguage = !settings.language && asked !== '' && toldLanguage !== '' && toldLanguage !== asked
+    if (isOtherLanguage) $.ui.log(`narrator: the model narrated in ${toldLanguage}, not ${asked}: reading the answer instead`, { to: 'debug' })
+    // No narration written, or not in the request's language: the answer itself, as far as it reads aloud.
+    const { text, language } = told?.text && !isOtherLanguage ? told : { text: cut(direct, 250), language: directLanguage }
     if (language) spokenLanguage = language
     if (text) await speak($, narration, text, language)
   } catch (error) {
