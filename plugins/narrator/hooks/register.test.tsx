@@ -397,6 +397,15 @@ test('after a turn, Haiku writes what Claude did and macOS says it in the langua
   expect(w.spoken[0]!.env).toEqual({ NARRATOR_TEXT: 'He añadido el narrador y los tests pasan.', NARRATOR_LANG: 'es', NARRATOR_VOICE: '', NARRATOR_SPEED: '1.3', NARRATOR_TICKET: '0000000000000' })
 })
 
+test('a stray first line from the model never reaches the speaker', async ($, on) => {
+  const w = world(on, { reply: '1\nHe añadido el narrador y los tests pasan.', store: { enabled: true } })
+  await startSession($)
+  const speech = w.nextSpeech()
+  await turn($)
+  await speech
+  expect(w.spoken[0]!.env.NARRATOR_TEXT).toBe('He añadido el narrador y los tests pasan.')
+})
+
 test('the voice setting reaches the speaker', { options: { voice: 'Mónica' } }, async ($, on) => {
   const w = world(on, { store: { enabled: true } })
   await startSession($)
@@ -687,6 +696,26 @@ test('the narration is read as plain text, in the language it names', () => {
   expect(parseNarration('es\nHe cambiado el **archivo** `register.ts`.')).toEqual({ language: 'es', text: 'He cambiado el archivo register.' })
   expect(parseNarration('"en"\n\nI fixed the tests.')).toEqual({ language: 'en', text: 'I fixed the tests.' })
   expect(parseNarration('He arreglado los tests y ahora todo pasa en la rama principal.').language).toBe('es')
+})
+
+test('the language line is never read out, whatever shape the model gives it', () => {
+  const fixed = { language: 'en', text: 'I fixed the tests.' }
+  // No code: the line is dropped all the same, and the language is told from the words, when they tell it.
+  expect(parseNarration('1\nI fixed the tests.')).toEqual({ language: '', text: 'I fixed the tests.' })
+  expect(parseNarration('1\n\nI fixed the tests and the build is green, so it is ready for you.')).toEqual({ language: 'en', text: 'I fixed the tests and the build is green, so it is ready for you.' })
+  expect(parseNarration('1. en\nI fixed the tests.')).toEqual(fixed)
+  expect(parseNarration('Language: en\nI fixed the tests.')).toEqual(fixed)
+  expect(parseNarration('**EN**\nI fixed the tests.')).toEqual(fixed)
+  expect(parseNarration('en-US\nI fixed the tests.')).toEqual(fixed)
+  expect(parseNarration('en: I fixed the tests.')).toEqual(fixed)
+  expect(parseNarration('es\nHe cambiado 2 archivos.')).toEqual({ language: 'es', text: 'He cambiado 2 archivos.' })
+  // A first line that is narration stays: a word that is no language, or one with more words after it.
+  expect(parseNarration('Ok\nI fixed the tests.').text).toBe('Ok I fixed the tests.')
+  expect(parseNarration('Hecho.\nHe arreglado los tests.').text).toBe('Hecho. He arreglado los tests.')
+  expect(parseNarration('100 de 100 tests pasan.\nTodo en verde.').text).toBe('100 de 100 tests pasan. Todo en verde.')
+  // Only the code line: nothing to say, so the answer itself is read.
+  expect(parseNarration('1').text).toBe('')
+  expect(parseNarration('en').text).toBe('')
   expect(plain('## Done\n- one\n- two [link](https://x.dev)\n```ts\ncode\n```\nend')).toBe('Done one two link end')
   expect(guessLanguage('ok')).toBe('')
 })

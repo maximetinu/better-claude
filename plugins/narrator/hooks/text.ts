@@ -1,7 +1,12 @@
 // What the narrator says, as text a synthesizer reads well, and the language it is in.
 
-// The first line of the narrator's reply: the language's code alone, maybe quoted or bracketed.
-const LANGUAGE_LINE = /^\s*\W*([a-z]{2,3})(?:[-_][a-z0-9]{2,8})?\W*\s*\n([\s\S]*)$/i
+// The first line of the narrator's reply: the language's code, maybe quoted or bracketed, after a
+// label ("Language: es") or beside a stray number ("1. es").
+const LANGUAGE_LINE = /^\s*[\W\d]*(?:(?:language|lang|idioma)[\W\d]*)?([a-z]{2,3})(?:[-_][a-z0-9]{2,8})?[\W\d]*\n([\s\S]*)$/i
+// A first line with no letters at all ("1", "--"): no narration, and never to be read out.
+const BARE_LINE = /^[\W\d]*\n([\s\S]*)$/
+// The code before a colon, on the narration's own line ("es: He añadido…").
+const INLINE_CODE = /^\W*([a-z]{2,3})(?:[-_][a-z0-9]{2,8})?\s*:\s+(\S[\s\S]*)$/i
 // Common words, to tell the language of a text no model narrated.
 const WORDS: Record<string, string[]> = {
   en: ['the', 'and', 'is', 'to', 'of', 'it', 'you', 'that', 'with', 'for', 'this', 'are'],
@@ -65,9 +70,27 @@ export function guessLanguage (text: string) {
   return best
 }
 
-/** The narrator's reply as its language and what to say; a reply without the code line is guessed. */
+/** Whether `code` names a language the runtime knows ("es", "en"), not any two letters ("ok"). */
+function isLanguageCode (code: string) {
+  try {
+    return new Intl.DisplayNames(['en'], { type: 'language', fallback: 'none' }).of(code.toLowerCase()) !== undefined
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The narrator's reply as its language and what to say. The code line is never said: also when the
+ * model writes it in another shape (a label, a stray number, after a colon), or writes a line with no
+ * letters in its place. A reply without the code is guessed.
+ */
 export function parseNarration (reply: string) {
-  const found = LANGUAGE_LINE.exec(reply.trim() + '\n')
-  const text = plain(found ? found[2]! : reply)
-  return { language: found ? found[1]!.toLowerCase() : guessLanguage(text), text }
+  const trimmed = reply.trim()
+  const found = LANGUAGE_LINE.exec(trimmed + '\n')
+  if (found && isLanguageCode(found[1]!)) return { language: found[1]!.toLowerCase(), text: plain(found[2]!) }
+  const inline = INLINE_CODE.exec(trimmed)
+  if (inline && isLanguageCode(inline[1]!)) return { language: inline[1]!.toLowerCase(), text: plain(inline[2]!) }
+  const bare = BARE_LINE.exec(trimmed + '\n')
+  const text = plain(bare ? bare[1]! : trimmed)
+  return { language: guessLanguage(text), text }
 }
