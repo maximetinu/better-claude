@@ -397,6 +397,18 @@ test('after a turn, Haiku writes what Claude did and macOS says it in the langua
   expect(w.spoken[0]!.env).toEqual({ NARRATOR_TEXT: 'He añadido el narrador y los tests pasan.', NARRATOR_LANG: 'es', NARRATOR_VOICE: '', NARRATOR_SPEED: '1.3', NARRATOR_TICKET: '0000000000000' })
 })
 
+test('the narration speaks to the user as Claude, and asks Claude\'s question back', async ($, on) => {
+  const w = world(on, { store: { enabled: true } })
+  await startSession($)
+  const speech = w.nextSpeech()
+  await turn($)
+  await speech
+  expect(w.systems[0]).toContain('never as "the user"')
+  expect(w.systems[0]).toContain('say "I", never "Claude"')
+  expect(w.systems[0]).toContain('end with that question, asked to them directly')
+  expect(w.systems[0]).not.toContain('no questions back')
+})
+
 test('the voice setting reaches the speaker', { options: { voice: 'Mónica' } }, async ($, on) => {
   const w = world(on, { store: { enabled: true } })
   await startSession($)
