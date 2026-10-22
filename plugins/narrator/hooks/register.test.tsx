@@ -496,6 +496,42 @@ test('the speed setting reaches the speaker', { options: { speed: 1.5 } }, async
   expect(w.spoken[0]!.env.NARRATOR_SPEED).toBe('1.5')
 })
 
+test('a speak command says the narration in place of the system voice, in the line', { options: { command: 'my-voice --quiet' } }, async ($, on) => {
+  const w = world(on, { store: { enabled: true } })
+  await startSession($)
+  const speech = w.nextSpeech()
+  await turn($)
+  await speech
+  expect(w.spoken).toHaveLength(1)
+  expect(w.spoken[0]!.argv.slice(0, 4)).toEqual(['sh', '-c', expect.stringContaining('NARRATOR_TICKET'), 'narrator-line'])
+  const [shell, flag, wrapper, name, ...command] = behindLine(w.spoken[0]!)
+  expect([shell, flag, name]).toEqual(['sh', '-c', 'narrator'])
+  expect(wrapper).toContain('NARRATOR_SPEAKER')
+  expect(wrapper).toContain('pkill -TERM -P "$pid"')
+  expect(command).toEqual(['sh', '-c', 'exec my-voice --quiet "$1"', 'narrator-command', 'He añadido el narrador y los tests pasan.'])
+  expect(w.spoken[0]!.env).toMatchObject({ NARRATOR_SPEAKER: 'my-voice --quiet', NARRATOR_TEXT: 'He añadido el narrador y los tests pasan.', NARRATOR_LANG: 'es' })
+})
+
+test('a speak command runs on Linux too', { options: { command: 'my-voice' } }, async ($, on) => {
+  const w = world(on, { system: 'Linux', store: { enabled: true } })
+  await startSession($)
+  const speech = w.nextSpeech()
+  await turn($)
+  await speech
+  expect(w.spoken).toHaveLength(1)
+  expect(behindLine(w.spoken[0]!).slice(4)).toEqual(['sh', '-c', 'exec my-voice "$1"', 'narrator-command', 'He añadido el narrador y los tests pasan.'])
+})
+
+test('on Windows a speak command is left aside: the system voice speaks', { options: { command: 'my-voice' } }, async ($, on) => {
+  const w = world(on, { system: 'Windows_NT', env: { OS: 'Windows_NT' }, store: { enabled: true } })
+  await startSession($)
+  const speech = w.nextSpeech()
+  await turn($)
+  await speech
+  expect(w.spoken[0]!.argv[0]).toBe('powershell')
+  expect(w.spoken[0]!.env.NARRATOR_SPEAKER).toBeUndefined()
+})
+
 test('with no language set, the switch shows none and the narrator follows the request', async ($, on) => {
   const w = world(on, { store: { enabled: true } })
   await startSession($)

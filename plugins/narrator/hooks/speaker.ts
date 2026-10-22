@@ -285,22 +285,26 @@ $voices | Sort-Object Language, Name -Unique | ForEach-Object { $_.Name + [char]
  * Linux: runs the synthesizer given as its arguments (spd-say, which speaks with whatever voice
  * speech-dispatcher is set up with, or espeak-ng), writing a `.` while it runs. Ended, or once
  * nobody reads, it ends the synthesizer and runs NARRATOR_STOP, which silences speech-dispatcher.
+ * It also runs a speak command of the person's own, on macOS too: NARRATOR_SPEAKER then names it.
  */
 export const LINUX = String.raw`
 "$@" &
 pid=$!
 stop () {
+  pkill -TERM -P "$pid" 2>/dev/null
   kill "$pid" 2>/dev/null
   if [ -n "$NARRATOR_STOP" ]; then $NARRATOR_STOP >/dev/null 2>&1; fi
   exit 0
 }
 trap stop TERM INT HUP PIPE
-echo "voice $1"
+speaker=$NARRATOR_SPEAKER
+[ -n "$speaker" ] || speaker=$1
+echo "voice $speaker"
 while kill -0 "$pid" 2>/dev/null; do
   echo . 2>/dev/null || stop
   sleep 0.1
 done
-wait "$pid" || echo "error: $1 failed"
+wait "$pid" || echo "error: $speaker failed"
 `
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)

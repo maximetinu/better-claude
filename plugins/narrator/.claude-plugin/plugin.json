@@ -51,6 +51,12 @@
       "description": "An answer up to this many characters is read out as it is, with no model call to narrate it. 0: always narrate.",
       "default": 200,
       "min": 0
+    },
+    "command": {
+      "type": "string",
+      "title": "Speak command",
+      "description": "A program of your own to say each narration with, in place of the system's voice (macOS and Linux): the shell runs it with the narration as its last argument. Empty: the system's voice.",
+      "default": ""
     }
   }
 }

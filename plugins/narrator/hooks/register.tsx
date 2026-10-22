@@ -90,7 +90,7 @@ const sweepStep = atom({ plugin: 'narrator', key: 'sweepStep' } as const, 0)
 /** An answer this short is read out as it is: no model call to write a narration of it. */
 const SHORT_ANSWER = 200
 
-let settings = { voice: '', model: 'haiku', speed: SPEED, shortAnswer: SHORT_ANSWER, language: '' }
+let settings = { voice: '', model: 'haiku', speed: SPEED, shortAnswer: SHORT_ANSWER, language: '', command: '' }
 // The main loop's turn so far: the prompt that started it and each tool call it made.
 let request = ''
 let actions: string[] = []
@@ -201,6 +201,11 @@ const inLine = (command: Command): Command => ({ ...command, argv: ['sh', '-c', 
 async function speakersFor ($: EngineInterface, text: string, language: string, voice: string, ticket: string): Promise<Command[]> {
   const env = { NARRATOR_TEXT: text, NARRATOR_LANG: language, NARRATOR_VOICE: voice, NARRATOR_SPEED: String(settings.speed), NARRATOR_TICKET: ticket }
   const system = await platformOf($)
+  // A speak command of the person's own, run by the shell with the narration as its last argument.
+  if (settings.command && system !== 'windows') {
+    const argv = ['sh', '-c', LINUX, 'narrator', 'sh', '-c', `exec ${settings.command} "$1"`, 'narrator-command', text]
+    return [inLine({ argv, env: { ...env, NARRATOR_SPEAKER: settings.command }, program: settings.command })]
+  }
   if (system === 'macos') return [inLine({ argv: ['osascript', '-l', 'JavaScript', '-e', MACOS], env, program: 'osascript' })]
   if (system === 'windows') return [{ argv: powershell(WINDOWS), env, program: 'powershell' }]
   if (system !== 'linux') return []
@@ -577,7 +582,8 @@ export const register: Register = (on, options) => {
     model: String(options.model || 'haiku'),
     speed: speed > 0 ? speed : SPEED,
     shortAnswer: shortAnswer >= 0 ? shortAnswer : SHORT_ANSWER,
-    language: languageOf(options.language)
+    language: languageOf(options.language),
+    command: String(options.command ?? '').trim()
   }
 
   on('session.start', async ($, e, next) => {
