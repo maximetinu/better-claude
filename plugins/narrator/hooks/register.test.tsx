@@ -4,7 +4,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { languageOf } from './register'
-import { guessLanguage, parseNarration, plain } from './text'
+import { finalQuestion, guessLanguage, parseNarration, plain, withQuestion } from './text'
 
 const USAGE = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 
@@ -400,6 +400,84 @@ test('after a turn, Haiku writes what Claude did and macOS says it in the langua
   expect(w.spoken[0]!.env).toEqual({ NARRATOR_TEXT: 'He añadido el narrador y los tests pasan.', NARRATOR_LANG: 'es', NARRATOR_VOICE: '', NARRATOR_SPEED: '1.3', NARRATOR_TICKET: '0000000000000' })
 })
 
+test("the narration speaks to the user as Claude, and asks Claude's question back", async ($, on) => {
+  const w = world(on, { store: { enabled: true } })
+  await startSession($)
+  const speech = w.nextSpeech()
+  await turn($)
+  await speech
+  expect(w.systems[0]).toContain('never as "the user"')
+  expect(w.systems[0]).toContain('say "I", never "Claude"')
+  expect(w.systems[0]).toContain('end with that question, asked to them directly')
+  expect(w.systems[0]).not.toContain('no questions back')
+})
+
+test('a stray first line from the model never reaches the speaker', async ($, on) => {
+  const w = world(on, { reply: '1\nHe añadido el narrador y los tests pasan.', store: { enabled: true } })
+  await startSession($)
+  const speech = w.nextSpeech()
+  await turn($)
+  await speech
+  expect(w.spoken[0]!.env.NARRATOR_TEXT).toBe('He añadido el narrador y los tests pasan.')
+})
+
+test("Claude's closing question is found as it reads aloud, and only at the end", () => {
+  expect(finalQuestion('Abro el PR combinado y cierro los otros 3.\n\nDespués cierro #19 con un comentario. ¿Lo hago?')).toBe('¿Lo hago?')
+  expect(finalQuestion('Fixed: 20 runs pass. Want me to open a PR?')).toBe('Want me to open a PR?')
+  expect(finalQuestion('Hay 2 caminos. ¿Abro el PR? ¿O lo dejo para mañana?')).toBe('¿Abro el PR? ¿O lo dejo para mañana?')
+  expect(finalQuestion('**¿Lo hago?**')).toBe('¿Lo hago?')
+  expect(finalQuestion('修正しました。PRを開きますか？')).toBe('PRを開きますか？')
+  expect(finalQuestion('تم الإصلاح. هل أفتح PR؟')).toBe('هل أفتح PR؟')
+  expect(finalQuestion('¿Por qué falla? Porque el botón no estaba listo.')).toBe('')
+  expect(finalQuestion('Done: the tests pass.')).toBe('')
+  expect(finalQuestion(`¿${'muy '.repeat(60)}larga?`)).toBe('')
+})
+
+test("the closing question follows the narration once, in place of the model's own", () => {
+  expect(withQuestion('I fixed the test.', 'Want me to open a PR?')).toBe('I fixed the test. Want me to open a PR?')
+  expect(withQuestion('I fixed the test. Shall I open one?', 'Want me to open a PR?')).toBe('I fixed the test. Want me to open a PR?')
+  expect(withQuestion('I fixed the test. Want me to open a PR?', 'Want me to open a PR?')).toBe('I fixed the test. Want me to open a PR?')
+  expect(withQuestion('I fixed the test; shall I open one?', 'Want me to open a PR?')).toBe('I fixed the test. Want me to open a PR?')
+  expect(withQuestion('He arreglado el test, ¿abro uno?', '¿Lo hago?')).toBe('He arreglado el test. ¿Lo hago?')
+  expect(withQuestion('Shall I open one?', 'Want me to open a PR?')).toBe('Want me to open a PR?')
+  expect(withQuestion('I fixed the test.', '')).toBe('I fixed the test.')
+  expect(withQuestion('', 'Want me to open a PR?')).toBe('')
+})
+
+test("Claude's closing question is said as Claude wrote it, after the narration, and the model is told so", async ($, on) => {
+  const w = world(on, { reply: 'en\nI added the narrator and the tests pass. I ask whether you want a PR?', store: { enabled: true } })
+  await startSession($)
+  const speech = w.nextSpeech()
+  await turn($, { answer: `${LONG}\n\nWant me to open a PR?` })
+  await speech
+  expect(w.prompts[0]).toContain('<question>\nWant me to open a PR?\n</question>')
+  expect(w.systems[0]).toContain('do not ask it, report it or mention it')
+  expect(w.spoken[0]!.env.NARRATOR_TEXT).toBe('I added the narrator and the tests pass. Want me to open a PR?')
+  const again = w.nextSpeech()
+  await narrator($, 'again')
+  await again
+  expect(w.spoken[1]!.env.NARRATOR_TEXT).toBe('I added the narrator and the tests pass. Want me to open a PR?')
+})
+
+test('with a language set, a question in another language is not said as it is: the model asks it in the language set', { options: { language: 'es' } }, async ($, on) => {
+  const w = world(on, { reply: 'es\nHe añadido el narrador y los tests pasan. ¿Abro un PR?', store: { enabled: true } })
+  await startSession($)
+  const speech = w.nextSpeech()
+  await turn($, { answer: `${LONG}\n\nWant me to open a PR?` })
+  await speech
+  expect(w.prompts[0]).not.toContain('<question>')
+  expect(w.spoken[0]!.env.NARRATOR_TEXT).toBe('He añadido el narrador y los tests pasan. ¿Abro un PR?')
+})
+
+test('the voice follows the words, not the code the model wrote', { options: { language: 'es' } }, async ($, on) => {
+  const w = world(on, { reply: 'es\nI added the narrator and the tests pass, so it is ready for you.', store: { enabled: true } })
+  await startSession($)
+  const speech = w.nextSpeech()
+  await turn($)
+  await speech
+  expect(w.spoken[0]!.env.NARRATOR_LANG).toBe('en')
+})
+
 test('the voice setting reaches the speaker', { options: { voice: 'Mónica' } }, async ($, on) => {
   const w = world(on, { store: { enabled: true } })
   await startSession($)
@@ -443,6 +521,29 @@ test('the language setting shows beside the switch, tells the narrator and reach
   expect(w.systems[0]).toContain('Always speak Spanish (es)')
   expect(w.spoken[0]!.env.NARRATOR_LANG).toBe('es')
   expect((await ui.find({ key: 'narrator' }))?.text).toBe('⏹︎ narrating · ES')
+})
+
+/** A Spanish answer too long to be read as it is. */
+const LARGO = `He añadido el **narrador** en \`plugins/narrator\`. ${'Habla después de cada turno, en tu idioma, con la mejor voz que tiene el sistema. '.repeat(3)}`
+
+test('a request whose words tell its language: the narrator is told to speak it', async ($, on) => {
+  const w = world(on, { store: { enabled: true } })
+  await startSession($)
+  const speech = w.nextSpeech()
+  await turn($, { prompt: 'añade el narrador y que hable en el idioma de la petición', answer: LARGO })
+  await speech
+  expect(w.systems[0]).toContain('Always speak Spanish (es)')
+  expect(w.spoken[0]!.env.NARRATOR_TEXT).toBe('He añadido el narrador y los tests pasan.')
+})
+
+test('a narration in another language than the request is not said: the answer is read instead', async ($, on) => {
+  const w = world(on, { reply: 'es\nI added the narrator and the tests pass, so it is ready for you.', store: { enabled: true } })
+  await startSession($)
+  const speech = w.nextSpeech()
+  await turn($, { prompt: 'añade el narrador y que hable en el idioma de la petición', answer: LARGO })
+  await speech
+  expect(w.spoken[0]!.env.NARRATOR_TEXT).toStartWith('He añadido el narrador en narrator.')
+  expect(w.spoken[0]!.env.NARRATOR_LANG).toBe('es')
 })
 
 test('a region is dropped, and a value that is no known language means automatic', () => {
@@ -702,6 +803,28 @@ test('the narration is read as plain text, in the language it names', () => {
   expect(parseNarration('es\nHe cambiado el **archivo** `register.ts`.')).toEqual({ language: 'es', text: 'He cambiado el archivo register.' })
   expect(parseNarration('"en"\n\nI fixed the tests.')).toEqual({ language: 'en', text: 'I fixed the tests.' })
   expect(parseNarration('He arreglado los tests y ahora todo pasa en la rama principal.').language).toBe('es')
+})
+
+test('the language line is never read out, whatever shape the model gives it', () => {
+  const fixed = { language: 'en', text: 'I fixed the tests.' }
+  // No code: the line is dropped all the same, and the language is told from the words, when they tell it.
+  expect(parseNarration('1\nI fixed the tests.')).toEqual({ language: '', text: 'I fixed the tests.' })
+  expect(parseNarration('1\n\nI fixed the tests and the build is green, so it is ready for you.')).toEqual({ language: 'en', text: 'I fixed the tests and the build is green, so it is ready for you.' })
+  expect(parseNarration('1. en\nI fixed the tests.')).toEqual(fixed)
+  expect(parseNarration('Language: en\nI fixed the tests.')).toEqual(fixed)
+  expect(parseNarration('**EN**\nI fixed the tests.')).toEqual(fixed)
+  expect(parseNarration('en-US\nI fixed the tests.')).toEqual(fixed)
+  expect(parseNarration('en: I fixed the tests.')).toEqual(fixed)
+  expect(parseNarration('es\nHe cambiado 2 archivos.')).toEqual({ language: 'es', text: 'He cambiado 2 archivos.' })
+  // A first line that is narration stays: a word that is no language, non-Latin letters, or one with more words after it.
+  expect(parseNarration('Ok\nI fixed the tests.').text).toBe('Ok I fixed the tests.')
+  expect(parseNarration('Hecho.\nHe arreglado los tests.').text).toBe('Hecho. He arreglado los tests.')
+  expect(parseNarration('100 de 100 tests pasan.\nTodo en verde.').text).toBe('100 de 100 tests pasan. Todo en verde.')
+  expect(parseNarration('修正しました。').text).toBe('修正しました。')
+  expect(parseNarration('修正しました。\nテストも通っています。').text).toBe('修正しました。 テストも通っています。')
+  // Only the code line: nothing to say, so the answer itself is read.
+  expect(parseNarration('1').text).toBe('')
+  expect(parseNarration('en').text).toBe('')
   expect(plain('## Done\n- one\n- two [link](https://x.dev)\n```ts\ncode\n```\nend')).toBe('Done one two link end')
   expect(guessLanguage('ok')).toBe('')
 })

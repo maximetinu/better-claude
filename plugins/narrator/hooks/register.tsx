@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderNode, RenderViewport, Timer } from 'claude-code'
 
 import { LINUX, MACOS, MACOS_VOICES, QUEUE, WINDOWS, WINDOWS_VOICES, dispatcherRate, espeakWords, powershell } from './speaker'
-import { cut, guessLanguage, parseNarration, plain } from './text'
+import { cut, finalQuestion, guessLanguage, parseNarration, plain, withQuestion } from './text'
 
 type Platform = 'macos' | 'windows' | 'linux' | 'other'
 /** A program that speaks, and what it is told through its environment. */
@@ -68,16 +68,18 @@ function spoken (language: string) {
   return `Always speak ${languageName(language) ?? language} (${language}), whatever language the request or Claude's final message is in.`
 }
 
-const NARRATOR = (language: string) => `You are the voice of Claude Code, a coding assistant. After each of its turns you tell the user, out loud, what Claude just did, speaking as Claude in the first person.
+const NARRATOR = (language: string) => `You are the voice of Claude Code, a coding assistant. After each of its turns you speak to the user, out loud, as Claude: in the first person, to them. You are Claude talking to the person, not a narrator talking about them.
 
 You get the user's request, the actions Claude took and Claude's final message. Say what a colleague would say in passing: what was done and how it turned out, plus anything the user has to do or decide now. Leave out how it was done. If Claude only answered a question, give the gist of the answer.
+
+Talk to the user, never about them: address them in the second person ("you"), in the language you speak, never as "the user". And you are Claude: say "I", never "Claude" or "the assistant". When you are given Claude's closing question, it is read right after your words, as Claude wrote it: do not ask it, report it or mention it. Otherwise, if Claude's final message asks the user something, end with that question, asked to them directly as a question ("Do I run the quick test?"), not reported ("I ask whether to run it") and with no label before it.
 
 ${spoken(language)}
 
 Rules:
 - A speech synthesizer reads it aloud: plain sentences only. No markdown, lists, emojis or code, and no file paths, URLs, hashes or version strings read out character by character: name files and commands the way a person says them ("the register file", "the tests").
-- Short: one sentence, two only for a large change; never more than 30 words.
-- No preamble ("Sure", "In summary"), no questions back, nothing Claude did not say or do.
+- Short: one sentence, two only for a large change; never more than 30 words, plus Claude's question when it asked one.
+- No preamble ("Sure", "In summary"), no question of your own, nothing Claude did not say or do.
 
 Reply in exactly this form: the first line holds only the ISO 639-1 code of the language you speak (es, en, pt, fr...), and the narration starts on the second line.`
 
@@ -130,13 +132,14 @@ function describe (e: object) {
   return detail === undefined ? String(input.tool) : `${String(input.tool)}: ${cut(String(detail).replace(/\s+/g, ' '), 200)}`
 }
 
-/** What the narrator is told about the turn. */
-function brief (answer: string) {
+/** What the narrator is told about the turn, and Claude's closing question, which is read after it as it is. */
+function brief (answer: string, question: string) {
   const did = actions.length > 0 ? actions.map(action => `- ${action}`).join('\n') : '(no tools: Claude only answered)'
   return [
     `The user's request:\n<request>\n${cut(request, 2000) || '(none: Claude went on by itself)'}\n</request>`,
     `What Claude did, in order:\n${did}`,
-    `Claude's final message to the user:\n<message>\n${cut(answer, 6000)}\n</message>`
+    `Claude's final message to the user:\n<message>\n${cut(answer, 6000)}\n</message>`,
+    ...(question ? [`Claude's closing question, read right after your words as it is (do not ask, report or mention it):\n<question>\n${question}\n</question>`] : [])
   ].join('\n\n')
 }
 
@@ -423,19 +426,37 @@ async function narrate ($: EngineInterface, answer: string) {
       await speak($, narration, direct, directLanguage)
       return
     }
+    // The language to speak: the setting, else the request's when its words tell it. The model is told
+    // it in so many words: left to tell it from a request in one language and tool calls in another, it
+    // sometimes narrates in the wrong one.
+    const asked = settings.language || guessLanguage(request)
+    // Claude's closing question is said as Claude wrote it, after the narration: the model, asked to
+    // pass it on, sometimes reports it ("I ask whether to do it") or drops it. Only when the answer is in
+    // the language to speak: a question in another one is left to the model to ask in it.
+    const answerLanguage = guessLanguage(answer)
+    const question = asked !== '' && answerLanguage !== '' && answerLanguage !== asked ? '' : finalQuestion(answer)
     const reply = await $.model.complete(
       // A short summary: no deep thinking, so it is said right after the turn.
-      { model: settings.model, system: NARRATOR(settings.language), prompt: brief(answer), maxTokens: 150, effort: 'low', timeoutMs: 30_000 },
+      { model: settings.model, system: NARRATOR(asked), prompt: brief(answer, question), maxTokens: 150, effort: 'low', timeoutMs: 30_000 },
       { signal: narration.abort.signal }
     ).catch(() => undefined)
     if (!narration.isActive) return
     const told = reply?.isAnswered ? parseNarration(reply.text) : undefined
-    // No narration written: the answer itself, as far as it reads aloud.
-    const { text, language } = told?.text ? told : { text: cut(direct, 250), language: directLanguage }
-    if (language) spokenLanguage = language
-    if (!text) return
-    lastSaid = { text, language }
-    await speak($, narration, text, language)
+    // A narration in another language than the request's is not said, whatever code the model wrote:
+    // its words tell. The setting is left to the model, as the answer may be in neither.
+    const toldLanguage = told ? guessLanguage(told.text) || told.language : ''
+    const isOtherLanguage = !settings.language && asked !== '' && toldLanguage !== '' && toldLanguage !== asked
+    if (isOtherLanguage) $.ui.log(`narrator: the model narrated in ${toldLanguage}, not ${asked}: reading the answer instead`, { to: 'debug' })
+    // No narration written, or not in the request's language: the answer itself, as far as it reads aloud.
+    const { text, language } = told?.text && !isOtherLanguage ? told : { text: cut(direct, 250), language: directLanguage }
+    const said = withQuestion(text, question)
+    if (!said) return
+    // The voice follows the words, not the code the model wrote: a narration in English is never read
+    // by a Spanish voice.
+    const saidLanguage = guessLanguage(said) || language
+    if (saidLanguage) spokenLanguage = saidLanguage
+    lastSaid = { text: said, language: saidLanguage }
+    await speak($, narration, said, saidLanguage)
   } catch (error) {
     $.ui.log(`narrator: ${message(error)}`, { to: 'debug' })
   } finally {
